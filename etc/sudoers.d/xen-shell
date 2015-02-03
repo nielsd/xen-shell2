@@ -1,0 +1,4 @@
+User_Alias      XENUSERS = %xenshell
+Cmnd_Alias      XEN = /usr/sbin/xl
+XENUSERS        ALL = NOPASSWD: XEN
+

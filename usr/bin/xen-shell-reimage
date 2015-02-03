@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+#  Reimage the current machine.
+#
+# Steve
+# --
+#
+
+
+#
+#  Get the machine we're imaging.
+#
+host=$1
+if [ -z "${host}" ]; then
+    echo "Usage: $0 host user"
+    exit
+fi
+
+#
+#  Get the user that we're invoked by.
+#
+user=$2
+if [ -z "${user}" ]; then
+     echo "Usage: $0 host user"
+     exit
+fi
+
+#
+#  Make sure that the image.sh script exists.  We shouldn't have been
+# called if that wasn't the case .. but ..
+#
+if [ ! -x "/home/${user}/image.sh" ]; then
+    echo "${user} does not have an executable reimaging script."
+    exit
+fi
+
+clear
+cat <<EOF
+
+ WARNING!!!
+
+ This process will completely reset your Xen guest to a fresh installation
+of Debian GNU/Linux.
+
+ ALL OF YOUR DATA WILL BE LOST
+
+ If you wish to proceed please enter the following text exactly:
+
+-
+I wish to reimage ${host}
+-
+
+EOF
+
+
+read input
+if [  "${input}" != "I wish to reimage ${host}" ]; then
+    clear
+    echo "You changed your mind"
+    echo "Sensible choice"
+    echo " "
+    exit;
+fi
+
+
+#
+#  Give a final choice to bail out
+#
+clear
+cat <<EOF
+
+  Image recreation and wiping confirmed.
+
+  Sleeping for 10 seconds to give you one last chance to abort with 'Ctrl-c'
+
+EOF
+
+echo -n " "
+for i in `seq 1 10`; do 
+    echo -n "${i} "
+    sleep 1
+done
+/bin/echo -e "\nCommitted."
+
+
+#
+#  Run the reimage script, with the instance name to reimage and the username
+# that it is owned by.
+#
+/home/${user}/image.sh ${host} ${user}
+
+
+#
+#  End of this script
+#
+exit

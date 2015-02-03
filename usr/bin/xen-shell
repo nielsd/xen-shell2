@@ -1,0 +1,2342 @@
+#!/usr/bin/perl -w
+
+=head1 NAME
+
+xen-shell - Provide a console interface to control Xen guests.
+
+=cut
+
+
+=head1 SYNOPSIS
+
+  xen-shell [options]
+
+  Options:
+
+   --control    Specify which instance to control by default.
+   --help       Show brief help intstructions.
+   --manual     Show more complete help.
+   --version    Show the version of the software.
+
+=cut
+
+
+=head1 DESCRIPTION
+
+  xen-shell provides a simple console interface to allow a user to
+ control a Xen instances which are running upon the local system.
+
+  The shell features include:
+
+=over 8
+
+=item Command line completion
+
+=item Command history
+
+=item The ability to run within GNU Screen to allow long-running jobs to be completed "offline".
+
+=back
+
+
+=cut
+
+
+=head1 XEN SETUP
+
+  There are two ways to setup a Xen guest which might be controlled by
+ the local user "bob".
+
+  The simplest method is to give a Xen instance the name "bob", (i.e.
+ a Xen domU which has the same name as the login account of the user
+ who is allowed to control it.), this has the downside that a local
+ user may only control a single instance.
+
+  The second solution is to add a line such as the following to the
+ relevant Xen guest configuration file beneath /etc/xen:
+
+=for example begin
+
+  xen_shell = 'bob, steve, chris, niels'
+
+=for example end
+
+  This line, which will be ignored by Xen itself, will allow the Xen
+ shell to be used by the three local users "bob", "steve", and "niels" -
+ and each of them will be able to work with that host.
+
+  If a user is allowed to control more than one Xen guest upon the
+ current host then the two commands "control" and "list" will be made
+ available to them.
+
+
+=cut
+
+
+
+=head1 COMMAND BLACKLISTING
+
+  There are times when you might want to setup this shell such that
+ some commands are not available.
+
+  For the optional commands this is straightfoward; simply do not
+ configure anything they rely upon.
+
+  For the built-in commands such as "version", "uptime", etc, you will
+ need to use the built in blacklist support.
+
+  There are two ways you can disable commands within the shell:
+
+=over 8
+
+=item Use /etc/xen-shell/xen-shell.conf
+
+=item Use a per-domain blacklist
+
+=back
+
+
+  To disable a command globally, amongst all Xen guests upon a host,
+ you can simply add the following to xen-shell.conf:
+
+=for example begin
+
+  #
+  #  Do not allow the following two commands
+  #
+  blacklist = version, uptime
+
+=for example end
+
+  If you wish to disable a command for just a single instance, or
+ only a few machines, then edit the Xen configuration file(s) to include
+ this:
+
+=for example begin
+
+  xen_shell_blacklist = 'version, uptime'
+
+=for example end
+
+=cut
+
+
+=head1 REIMAGING SUPPORT
+
+  The shell has a built-in "reimage" command which can be used by users
+ to reinitialize their system.
+
+  The reimage command itself does nothing, it merely executes the file
+ "image.sh" from the users home directory, it is assumed that you will
+ write your own script - perhaps to invoke "xen-create-image" to do
+ the real job.
+
+  A sample script, ~skx/image.sh, might look like this:
+
+=for example begin
+
+   #!/bin/sh
+   #
+   # Reimaging script for the user skx.
+   #
+
+   # the instance to be reimaged will be passed upon the command line.
+   host=$1
+
+   # The username we are.
+   user=$2
+
+   # find the IP by grepping /etc/hosts.
+   ip=$(grep "$host" /etc/hosts|awk '{print $1}')
+
+   if [ ! -z "${ip}" ]; then
+
+      xen-create-image --hostname=$host --ip=$ip \
+      --size=9.5Gb --swap=512Mb --memory=256Mb --force \
+      --dist=etch --admin=$user
+   else
+
+      echo "IP address not found for guest $host - aborting"
+
+   fi
+
+=for example end
+
+  If ~$USER/image.sh doesn't exist, or isn't executable, this command
+ will be disabled.
+
+=cut
+
+
+=head1 REVERSE DNS SUPPORT
+
+  This shell contains a built-in system for allowing a Xen-shell user to
+ manipulate reverse DNS entries for IP addresses.  The shell itself doesn't
+ do this directly, instead the shell will manipulate a simple text file
+ in a users home directory.
+
+  Create the file /home/$USER/ips.txt with contents of the following form:
+
+=for example begin
+
+   192.168.1.1 foo.my.flat
+   192.168.1.2 bar.my.flat
+   192.168.1.3 baz.my.flat
+
+=for example end
+
+  If this file is present then the "rdns" command will be available to
+ that user.  The "rdns" command, when executed with no arguments will
+ simply display this file.
+
+  When the user attempts to set reverse DNS this file will be updated.
+
+  It is assumed you will have your own cronjob to actually read these
+ files and perform the DNS updates, the shell support is just half the
+ implementation.
+
+  If the file doesn't exist, or isn't writable, then the command will
+ be disabled.
+
+=cut
+
+
+=head1 BANDWIDTH TRACKING
+
+  If you've got the 'vnstat' tool installed upon your host and the
+ primary network interface of your Xen guest is given the same name
+ as that of the guest you may see the bandwidth used via the 'bandwidth'
+ command.
+
+  To change the name of your interface you can configure your
+ Xen guest with something like this in the configuration file:
+
+=for example begin
+
+  vif = [ 'ip=192.168.1.100,vifname=skx' ]
+
+=for example end
+
+  Now when you run "ifconfig -a" upon the dom0 you'll see the guest
+ has an interface named 'skx'.
+
+  If the system cannot find a database for bandwidth tracking of
+ a particular guest then the bandwidth command will be disabled.
+
+=cut
+
+
+=head1 AUTHOR
+
+ Niels Dettenbach
+ http://www.syndicat.com
+ 
+ and special thanks to 
+
+ Steve Kemps:
+ http://www.steve.org.uk
+
+=cut
+
+
+=head1 LICENSE
+
+Copyright (c) 2015 by Niels Dettenbach, forked from Steve Kemp.  All rights reserved.
+
+This module is free software;
+you can redistribute it and/or modify it under
+the same terms as Perl itself.
+The LICENSE file contains the full text of the license.
+
+=cut
+
+
+
+use strict;
+use warnings;
+use English;
+use Getopt::Long;
+use Pod::Usage;
+
+
+#
+#  Release number of this script.
+#
+my $RELEASE = '1.9';
+
+
+#
+#  Holder for values read from the configuration file, and the
+# default values.
+#
+my %CONFIG;
+$CONFIG{ 'pattern' }   = '/etc/xen/*';
+$CONFIG{ 'config' }    = '/etc/xen-shell/xen-shell.conf';
+$CONFIG{ 'blacklist' } = '';
+$CONFIG{ 'path_cfg' }  = '/etc/xen/auto/';
+
+
+
+#
+#  Storage for the Xen configuration file(s) we've read.
+#
+#  We need to keep some pieces of data around to handle the case
+# of users switching control to a difference instance, and being
+# able to correctly determine which commands are allowed.
+#
+# (i.e coping with per-instance command blacklisting.)
+#
+my %xenBlacklists;
+
+
+
+#
+#  Dispatch table which contains the mapping between the commands
+# we make available and the routine which implements that behaviour.
+#
+#  This table also contains both the long and the short form of each
+# commands help text.
+#
+#
+my %dispatch = (
+    "bandwidth" => { sub  => \&do_bandwidth,
+                     args => "[hourly|daily|weekly|monthly]",
+                     help => "Show your bandwidth usage.",
+                     info => "Show your bandwidth usage.",
+                   },
+    "boot" => {
+        sub => \&do_boot,
+        help =>
+          "Start the Xen guest, if it is not running.\nIf the 'console' parameter is used then show the console immediately..",
+        args => "[console]",
+        info => "Boot the Xen guest.",
+    },
+    "control" => {
+        sub => \&do_control,
+        help =>
+          "Take control of a particular instance.\nThis command makes all subsequent operations apply to the Xen instance specified.",
+        info => "Specify which Xen guest to control.",
+    },
+    "console" => {
+        sub => \&do_console,
+        help =>
+          "Connect to the serial console of the Xen instance using GNU Screen.\n\nTo exit the serial prompt type 'Ctrl+]'\nYou may instead exit screen with 'Ctrl+a k', or 'Ctrl+a d'.",
+        info => "Gain access to a Xen guest via the serial console.",
+    },
+    "exit" => { sub  => \&do_exit,
+                help => "Exit the shell.",
+                info => "Exit the shell.",
+              },
+    "help" => {
+        sub  => \&do_help,
+        args => "[command]",
+        help =>
+          "Show help about the specified command, or all commands if no command is specified.",
+        info => "Show general, or command-specific, help information.",
+    },
+    "list" => {
+        sub => \&do_list,
+        help =>
+          "Show the names of the Xen instances you may control upon this host.",
+        info => "List Xen instances which you may control.",
+    },
+    "passwd" => { sub  => \&do_password,
+                  help => "Change your login password.",
+                  info => "Change the password used to access this host.",
+                },
+    "pause" => { sub  => \&do_pause,
+                 help => "Pause your instance.",
+                 info => "This will pause the Xen guest.",
+               },
+    "quit" =>    # Dupe: exit
+      { sub  => \&do_exit,
+        help => "Exit this shell.",
+        info => "Exit this shell.",
+      },
+    "reboot" => { sub  => \&do_reboot,
+                  help => "Reboot the Xen guest.",
+                  info => "Reboot the Xen guest.",
+                },
+    "rdns" => {
+        sub  => \&do_rdns,
+        args => "[ipaddress some.host.name]",
+        help =>
+          "Setup Reverse DNS for allocated IP addresses.\n\nWhen called with no arguments show current reverse DNS details.",
+        info => "Setup reverse DNS for allocated IP addresses",
+    },
+    "reimage" => {
+        sub => \&do_reimage,
+        help =>
+          "Erase a Xen guest and reinitialise it to a fresh installation of Sarge.",
+        info => "Reset your system to a pristine installation.",
+    },
+    "serial" =>    # Dupe: console
+      { sub => \&do_console,
+        help =>
+          "Connect to the serial console of the Xen instance using GNU Screen.\n\nTo exit the serial prompt type 'Ctrl+]'\nYou may instead exit screen with 'Ctrl+a k', or 'Ctrl+a d'.",
+        info => "Gain access to the Xen guest via the serial console.",
+      },
+    "shutdown" => {
+        sub  => \&do_shutdown,
+        args => "[force]",
+        help =>
+          "Shutdown the Xen guest.\nIf the 'force' parameter is used then we'll forcibly terminate.",
+        info => "Shutdown the Xen guest.",
+    },
+    "status" => { sub  => \&do_status,
+                  help => "Show whether the Xen guest is running or not.",
+                  info => "Show the status of the Xen guest.",
+                },
+    "author" => { sub => \&do_author, },
+    "sysreq" => {
+        sub  => \&do_sysreq,
+        args => "[string]",
+        help =>
+          "Send a 'sysreq' keystroke to the guest.\nThis allows you to try to cleanly shutdown a hung instance, for example.",
+        info => "Send a 'sysreq' keystroke to the guest.",
+    },
+    "top" => {
+            sub  => \&do_top,
+            help => "Show the list of running instances, their CPU usage, etc.",
+            info => "Show system resource usage.",
+    },
+    "unpause" => { sub  => \&do_unpause,
+                   help => "Unpause your instance, and start it running again.",
+                   info => "This will unpause the Xen guest.",
+                 },
+    "uptime" => {
+            sub  => \&do_uptime,
+            help => "Show the uptime of the host & guest systems.",
+            info =>
+              "Show the uptime information of your guest system and this host.",
+    },
+    "version" => { sub  => \&do_version,
+                   help => "Show the version of this shell, and of Xen.",
+                   info => "Show the version of this shell, and of Xen.",
+                 },
+    "whoami" => {
+                sub  => \&do_whoami,
+                help => "Show the user you're connected as.",
+                info => "Show the user you're connected to the host system as.",
+    },
+);
+
+
+
+#
+#  The previous lookup table contains *all* command mappings.
+#
+#  This hash contains a copy of that one, however this table will
+# potentially have items removed.  Either:
+#
+#  1.  Because the command has been blacklisted.  (Globally, or per-instance).
+#
+#  2.  Because a supporting piece of software is not present. (eg. vnstat.)
+#
+my %lookupTable;
+
+
+#
+# The instances that the current user may control.
+#
+my @INSTANCES;
+
+#
+#  The name of the instance currently being controlled.
+#
+my $ACTIVE = '';
+
+
+
+####
+#
+#  Start of code
+#
+####
+
+
+
+#
+# Find the username of the user who invoked this script.
+#
+my $USER = getpwuid($REAL_USER_ID);
+
+
+
+#
+#  Parse any command line arguments which might be present.
+#
+#  Do this first so that --help, etc, works.
+#
+parseCommandLineArguments();
+
+
+
+#
+#  Parse our configuration file, if it exists.
+#
+parseConfigurationFile( $CONFIG{ 'config' } ) if ( -e $CONFIG{ 'config' } );
+
+
+
+#
+# Sanity check our host and user.
+#
+sanityCheck();
+
+
+
+#
+#  Remove commands the user can't access - either because the supporting
+# software is not present, or because they've been globally disabled.
+#
+removeCommands();
+
+
+
+#
+# Show our banner.
+#
+showBanner();
+
+
+#
+#  If the user specified an initial machine to control then use it,
+# if possible.
+#
+$ACTIVE = $CONFIG{ 'control' }
+  if ( defined( $CONFIG{ 'control' } ) &&
+       canControl( $CONFIG{ 'control' } ) );
+
+
+#
+#  Setup a signal handler to make sure we save history at exit-time.
+#
+$SIG{ INT } = "do_exit";
+
+
+#
+#
+#  Create the readline interface.
+#
+my $term = createTerminal();
+
+
+
+#
+#  Load any command history which might be present.
+#
+loadHistory($term);
+
+
+
+#
+#  Run our command loop - note this never returns.
+#
+runMainLoop($term);
+
+
+
+#
+#  Never reached
+#
+exit;
+
+
+
+=begin doc
+
+  Parse any command line options which might be present.
+
+=end doc
+
+=cut
+
+sub parseCommandLineArguments
+{
+    my $SHOW_HELP    = 0;
+    my $SHOW_MANUAL  = 0;
+    my $SHOW_VERSION = 0;
+
+    #
+    #  Parse options.
+    #
+    if (
+        !GetOptions(
+            "help",    \$SHOW_HELP,
+            "manual",  \$SHOW_MANUAL,
+            "version", \$SHOW_VERSION,
+
+            "control=s", \$CONFIG{ 'control' },
+                   ) )
+    {
+        exit;
+    }
+
+    pod2usage(1) if $SHOW_HELP;
+    pod2usage( -verbose => 2 ) if $SHOW_MANUAL;
+
+    if ($SHOW_VERSION)
+    {
+        if ( $CONFIG{ 'banner' } )
+        {
+            print $CONFIG{ 'banner' } . "\n";
+        }
+        else
+        {
+            print "xen-shell v$RELEASE\n";
+        }
+        exit;
+    }
+}
+
+
+
+=begin doc
+
+  Parse our configuration file.
+
+=end doc
+
+=cut
+
+sub parseConfigurationFile
+{
+    my ($file) = (@_);
+
+    #
+    #  Make sure the file is specified + exists.
+    #
+    return if ( !-e $file );
+
+    open( FILE, "<", $file ) or die "Cannot read file '$file' - $!";
+    while ( defined( my $line = <FILE> ) )
+    {
+        chomp $line;
+
+        # Skip lines beginning with comments
+        next if ( $line =~ /^([ \t]*)\#/ );
+
+        # Skip blank lines
+        next if ( length($line) < 1 );
+
+        # Strip trailing comments.
+        if ( $line =~ /(.*)\#(.*)/ )
+        {
+            $line = $1;
+        }
+
+        # Find variable settings
+        if ( $line =~ /([^=]+)=([^\n]+)/ )
+        {
+            my $key = $1;
+            my $val = $2;
+
+            # Strip leading and trailing whitespace.
+            $key =~ s/^\s+//;
+            $key =~ s/\s+$//;
+            $val =~ s/^\s+//;
+            $val =~ s/\s+$//;
+
+            # Store value.
+            $CONFIG{ $key } = $val;
+        }
+    }
+
+    close(FILE);
+}
+
+
+
+=begin doc
+
+  Sanity check that we can load the Perl modules we require.
+
+  Also make sure the current user has a Xen guest on this host machine.
+
+  Note that if we detect errors we will sleep for a while after displaying
+ them - this is to allow users of PuTTY to see them before they are logged
+ out.  (Because PuTTY closes the window on disconnection by default.)
+
+=end doc
+
+=cut
+
+sub sanityCheck
+{
+
+    #
+    #  Test we have the perl modules we need.
+    #
+    BEGIN
+    {
+        eval {
+            require Term::ReadLine;
+            require Term::ReadLine::Gnu;
+        };
+    }
+    if ($@)
+    {
+        print "Package 'Term::ReadLine::Gnu' not installed.\n";
+        print "Aborting\n";
+        sleep 5;
+        exit;
+    }
+
+    #
+    #  Test that the current user has a sane name only letters digits
+    # and the underscore are allowed
+    #
+    if ( $USER !~ /^([a-zA-Z0-9_-]+)$/ )
+    {
+        print "Username '$USER' contains disallowed characters.\n";
+        print "Aborting\n";
+        sleep 5;
+        exit;
+    }
+
+    #
+    #  Test that the user has a Xen guest present upon this host.
+    #
+    #  We parse each file beneath the Xen configuration directory and
+    # look for suitable instances.
+    #
+    #
+    @INSTANCES = findInstancesFor($USER);
+    if ( !@INSTANCES || scalar(@INSTANCES) < 1 )
+    {
+        print "User '$USER' doesn't have a Xen guest on this host.\n";
+        print "Aborting\n";
+        sleep 5;
+        exit;
+    }
+
+    #
+    #  If the user only has one instance under their control we'll
+    # default to controlling that one.
+    #
+    if ( scalar(@INSTANCES) == 1 )
+    {
+        $ACTIVE = $INSTANCES[0];
+    }
+
+}
+
+
+
+=begin doc
+
+  Does the user have an instance upon this host?  If so return an array
+ of names that the user may control.  Otherwise return undef.
+
+  There are two ways that a user may control an instance:
+
+   1.  By having "name = '$LOGIN'" inside the configuration file.
+
+   2.  By having "xen_shell = '$LOGIN,$LOGIN2'" inside the configuration file.
+
+=end doc
+
+=cut
+
+sub findInstancesFor
+{
+    my ($username) = (@_);
+
+    # The results.
+    my @results;
+
+    # Count of processed files.
+    my $count = 0;
+
+    # Process all files.
+    foreach my $file ( sort( glob( $CONFIG{ 'pattern' } ) ) )
+    {
+
+        # skip non-files.
+        next if ( -d $file );
+
+        # count the match
+        $count += 1;
+
+        # open and read the file.
+        open( CFG, "<", $file ) or die "Failed to open $file - $!";
+        my @contents = <CFG>;
+        close(CFG);
+
+        # data parsed from the key=value format.
+        my %settings = ();
+
+        # process each line.
+        foreach my $line (@contents)
+        {
+
+            # skip blank lines.
+            next if ( !defined($line) || !length($line) );
+            chomp($line);
+
+            # look for lines of the form 'key = value'
+            if ( $line =~ /^[ \t]*([^=]+)=(.*)$/ )
+            {
+                my $key = $1;
+                my $val = $2;
+
+                # can't happen?
+                next if ( ( !$key ) || ( !$val ) );
+
+                # Strip leading and trailing whitespace.
+                $key =~ s/^\s+//;
+                $key =~ s/\s+$//;
+                $val =~ s/^\s+//;
+                $val =~ s/\s+$//;
+
+                # strip leading + trailing ' + "
+                $val =~ s/^['"]//g;
+                $val =~ s/['"]$//g;
+
+                # store
+                $settings{ $key } = $val;
+            }
+        }
+
+        #
+        #  Did we find a name matching the current login?
+        #
+        if ( $settings{ 'name' } &&
+             lc( $settings{ 'name' } ) eq ( lc($username) ) )
+        {
+            push( @results, $settings{ 'name' } );
+        }
+
+        #
+        # Did we find an admin user matching our current login.
+        #
+        if ( $settings{ 'xen_shell' } )
+        {
+
+            # lower-case the admins
+            $settings{ 'xen_shell' } = lc( $settings{ 'xen_shell' } );
+
+            foreach my $potential ( split( /,/, $settings{ 'xen_shell' } ) )
+            {
+
+                # trim leading and trailing whitespace.
+                $potential =~ s/^\s+//;
+                $potential =~ s/\s+$//;
+
+                # does it match?
+                if ( ( $potential eq ( lc($username) ) ) &&
+                     ( length($username) ) )
+                {
+                    push @results, $settings{ 'name' };
+                }
+            }
+        }
+
+        #
+        #  Store the blacklist for the given guest name.
+        #
+        if ( ( $settings{ 'name' } ) && ( $settings{ 'xen_shell_blacklist' } ) )
+        {
+            $xenBlacklists{ $settings{ 'name' } } =
+              $settings{ 'xen_shell_blacklist' };
+        }
+    }
+
+    #
+    #  Sanity test.
+    #
+    if ( $count < 1 )
+    {
+        print <<EOF;
+
+  There were no Xen configuration files found which matched the pattern:
+
+   $CONFIG{'pattern'}
+
+  Please update /etc/xen-shell/xen-shell.conf
+
+EOF
+        exit;
+    }
+
+    #
+    #  Only return unique results.
+    #
+    #  (This handles the case of two files being present, such as:
+    #   foo.cfg + foo.cfg~)
+    #
+    my %seen;
+    my @uniq = grep !$seen{ $_ }++, @results;
+    return @uniq;
+}
+
+
+
+=begin doc
+
+  Can the current user control the specified instance?
+
+=end doc
+
+=cut
+
+sub canControl
+{
+    my ($inst) = (@_);
+
+    #
+    #  Seach for the results
+    #
+    return ( grep /^\Q$inst\E$/i, @INSTANCES );
+}
+
+
+
+=begin doc
+
+  Ensure that the user has a current host specified to control,
+ and that they can control that instance.
+
+  This is used by all commands which require an instance to operate
+ upon.
+
+  Return 0 on error, 1 if there is an appropriate instance controlled.
+
+=end doc
+
+=cut
+
+sub isControlling
+{
+
+    #
+    #  Make sure we have an active machine.
+    #
+    if ( !length($ACTIVE) )
+    {
+        print <<EOF;
+
+  You have not selected a Xen instance to control, and this command
+ is an instance-specific one.
+
+  You may use the following two commands:
+
+    list    ->  Show which Xen instances you may control.
+
+    control ->  Take control of the specified Xen instance.
+
+EOF
+        return 0;
+    }
+
+    #
+    #  Sanity check - ensure the user can control the
+    # selected instance.  This should never fail.
+    #
+    return 0 if ( !canControl($ACTIVE) );
+
+    #
+    #  The user is OK to operate the relevant command
+    #
+    return 1;
+}
+
+
+
+=begin doc
+
+  Remove any commands which the current user cannot use.
+
+  This means:
+
+    - We remove "vnstat" if there is no bandwidth accounting.
+    - We remove "rdns" if ~/ips.txt is missing or non-writable.
+    - We remove "reimage" if ~/image.sh isn't present and executable.
+    - We remove "passwd" if ~/.ssh/authorized_keys is present and non-empty.
+    - We remove "list" + "control" if the user can only access one Xen guest.
+    - We remove any command blacklisted in /etc/xen-shell/xen-shell.conf
+
+=end doc
+
+=cut
+
+sub removeCommands
+{
+
+    #
+    #  Bandwidth:  Remove this command unless there is at least one
+    # instance which is setup correctly.
+    #
+    my $has_vnstat = 0;
+    foreach my $name (@INSTANCES)
+    {
+        $has_vnstat = 1 if ( -e "/var/lib/vnstat/$name" );
+    }
+
+    if ( !$has_vnstat )
+    {
+        $dispatch{ 'bandwidth' } = undef;
+        delete( $dispatch{ 'bandwidth' } );
+    }
+
+    #
+    #  reimage
+    #
+    if ( ( !-e "/home/$USER/image.sh" ) ||
+         ( !-x "/home/$USER/image.sh" ) )
+    {
+        $dispatch{ 'reimage' } = undef;
+        delete( $dispatch{ 'reimage' } );
+    }
+
+    #
+    #  rdns
+    #
+    if ( ( !-e "/home/$USER/ips.txt" ) ||
+         ( !-w "/home/$USER/ips.txt" ) )
+    {
+        $dispatch{ 'rdns' } = undef;
+        delete( $dispatch{ 'rdns' } );
+    }
+
+    #
+    #  Password changing isn't available if key-based auth is used.
+    #
+    if ( -s "/home/$USER/.ssh/authorized_keys" )
+    {
+        $dispatch{ 'passwd' } = undef;
+        delete( $dispatch{ 'passwd' } );
+    }
+
+    #
+    #  If the user can only control one instance then there is
+    # no need for "control" and "list".
+    #
+    if ( scalar(@INSTANCES) < 2 )
+    {
+        $dispatch{ 'control' } = undef;
+        delete( $dispatch{ 'control' } );
+
+        $dispatch{ 'list' } = undef;
+        delete( $dispatch{ 'list' } );
+    }
+
+    #
+    #  Remove globally blacklisted commands
+    #
+    foreach my $banned ( split( /,/, $CONFIG{ 'blacklist' } ) )
+    {
+
+        # strip leading and trailing whitespace
+        $banned =~ s/^\s+//;
+        $banned =~ s/\s+$//;
+
+        next if ( !length($banned) );
+
+        # lowercase, because all our commands are.
+        $banned = lc($banned);
+        $dispatch{ $banned } = undef;
+        delete( $dispatch{ $banned } );
+    }
+
+    #
+    #  Now we've removed globally unavailable commands update
+    # the copy we'll work from.
+    #
+    %lookupTable = %dispatch;
+}
+
+
+
+=begin doc
+
+ Show the startup banner for the shell.
+
+=end doc
+
+=cut
+
+sub showBanner
+{
+    if ( $CONFIG{ 'banner' } )
+    {
+        print $CONFIG{ 'banner' } . "\n";
+    }
+    else
+    {
+        print "xen-shell v$RELEASE - type 'help' for help.\n";
+    }
+}
+
+
+
+=begin doc
+
+  Create the terminal interface, complete with command completion.
+
+  Rather than hard-wiring the commands which are available we take them
+ from our global dispatch table.
+
+=end doc
+
+=cut
+
+sub createTerminal
+{
+    my $term = new Term::ReadLine 'xen-shell';
+
+    #
+    # Process our dispatch table to determine which commands
+    # are available.
+    #
+    my @cmds = ();
+
+    #
+    #  Add all commands.
+    #
+    push @cmds, ( keys %dispatch );
+
+    #
+    #  Add all Xen instances the user can control if there are more than one.
+    #
+    if ( scalar(@INSTANCES) > 1 )
+    {
+        push @cmds, (@INSTANCES);
+    }
+
+    #
+    #  Remove the easter function.
+    #
+    @cmds = grep( !/^author$/, @cmds );
+
+    #
+    #  Add completion
+    #
+    my $attribs = $term->Attribs;
+    $attribs->{ completion_entry_function } =
+      $attribs->{ list_completion_function };
+    $attribs->{ completion_word } = \@cmds;
+
+    #
+    #  Return it
+    #
+    return ($term);
+}
+
+
+
+=begin doc
+
+  If the user has a history present in ~/.xen-shell load it up.
+
+=end doc
+
+=cut
+
+sub loadHistory
+{
+    my ($term) = (@_);
+
+    #
+    #  The name of the history file.
+    #
+    my $hist = $CONFIG{ 'history' } || ".xen-shell";
+
+    #
+    #  Load the file, if it exists, from the home directory.
+    #
+    my $file = $ENV{ 'HOME' } . "/" . $hist;
+    if ( -e $file )
+    {
+
+        #
+        #  Load the history if we can.
+        #
+        if ( UNIVERSAL::can( $term, 'ReadHistory' ) )
+        {
+            $term->ReadHistory($file);
+        }
+    }
+}
+
+
+
+=begin doc
+
+  Run the input reading + dispatching loop.   We use the dispatch
+ table already defined to handle input.
+
+  Parsing of command line input is extremely minimal - we break the
+ input line into "word" which is the first whitespace deliminated
+ token on the line and "args" which is the remainder of the line.
+
+  This is sufficient for our purposes.
+
+=end doc
+
+=cut
+
+sub runMainLoop
+{
+    my ($term) = (@_);
+
+    #
+    #  Prompt
+    #
+    my $prompt = getPrompt();
+
+    #
+    #  Command loop.
+    #
+    while ( defined( my $line = $term->readline($prompt) ) )
+    {
+
+        # Ignore empty lines.
+        next if ( !length($line) );
+
+        # Strip leading and trailing whitespace.
+        $line =~ s/^\s+//;
+        $line =~ s/\s+$//;
+
+        # If we have arguments then split them up.
+        my ( $word, @args ) = split( /[ \t]/, $line );
+
+        # Lookup command in our dispatch table.
+        my $cmd = $lookupTable{ lc($word) };
+
+        if ($cmd)
+        {
+
+            # Call the function with any arguments we might have.
+            $cmd->{ 'sub' }->( join( " ", @args ) );
+
+            # Add a successful line to our history, if we can.
+            if ( UNIVERSAL::can( $term, 'add_history' ) )
+            {
+                $term->add_history($line);
+            }
+        }
+        else
+        {
+
+            #
+            #  We got a word which wasn't recognised as a command.
+            # was it a hostname?
+            #
+            if ( canControl($word) )
+            {
+                do_control($word);
+            }
+            else
+            {
+                if ( defined($word) && length($word) )
+                {
+                    print "Unknown command: '$word' - type 'help' for help.\n";
+                }
+            }
+        }
+
+        #
+        #  Update the prompt - required in the case where the user
+        # has switched control to another instance.
+        #
+        $prompt = getPrompt();
+    }
+
+    #
+    #  Save history on exit.
+    #
+    do_exit();
+}
+
+
+
+=begin doc
+
+  Return a suitable prompt for use by the shell.
+
+  The prompt varies depending on what kind of control the user has,
+ and which instance is being controlled.
+
+=end doc
+
+=cut
+
+sub getPrompt
+{
+
+    #
+    #  If there is only one instance then "xen-shell>".
+    #
+    return "xen-shell> " if ( scalar(@INSTANCES) == 1 );
+
+    #
+    #  If there is an active instance then include that in the prompt.
+    #
+    return "xen-shell[$ACTIVE]> " if ( length($ACTIVE) );
+
+    #
+    #  Otherwise the default.
+    #
+    return "xen-shell> ";
+}
+
+
+
+=begin doc
+
+  Helper method to see if an instance is running.
+
+=end doc
+
+=cut
+
+sub isRunning
+{
+    my ($name) = (@_);
+
+    my $running = 0;
+    my $cmd     = "sudo xl list $name 2>/dev/null | grep $name";
+    my $out     = `$cmd`;
+
+    $running = 1 if ( ($out) && length($out) );
+
+    return ($running);
+}
+
+
+
+##
+#  Now we have the various handlers.
+#
+#  Handlers are listed alphabetically with each handler having a function
+# named "do_" + command-name.
+#
+##
+
+
+
+
+=begin doc
+
+  Show the author.
+
+=end doc
+
+=cut
+
+sub do_author
+{
+    print "Niels dettenbach <nd\@syndicat.com>\n";
+}
+
+
+
+=begin doc
+
+  Show your bandwidth usage.
+
+=end doc
+
+=cut
+
+sub do_bandwidth
+{
+
+    # optional reporting period
+    my ($period) = (@_);
+
+    my $arg = "--months";
+
+    #
+    #  See if we got a match
+    #
+    if ( defined($period) )
+    {
+        $arg = "--hours"  if ( lc($period) eq "hourly" );
+        $arg = "--days"   if ( lc($period) eq "daily" );
+        $arg = "--weeks"  if ( lc($period) eq "weekly" );
+        $arg = "--months" if ( lc($period) eq "monthly" );
+    }
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    #
+    #  A user might have N instances, of which only one might
+    # have vnstat setup.  Make sure this instance is setup.
+    #
+    if ( -e "/var/lib/vnstat/$ACTIVE" )
+    {
+        system("vnstat -i $ACTIVE $arg\n");
+    }
+    else
+    {
+        print "Guest '$ACTIVE' is not configured for bandwidth display.\n";
+    }
+}
+
+
+
+=begin doc
+
+  Boot the Xen guest instance.
+
+=end doc
+
+=cut
+
+sub do_boot
+{
+    my ($arg) = (@_);
+    my $path_cfg = $CONFIG{'path_cfg'};
+
+    #
+    #  Is this to be a forced shutdown?
+    #
+    my $console = 0;
+    $console = 1 if ( defined($arg) && ( lc($arg) eq "console" ) );
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Booting instance: $ACTIVE\n";
+
+    if ($console)
+    {
+        system("sudo xl create $path_cfg$ACTIVE.cfg -c");
+    }
+    else
+    {
+        system("sudo xl create $path_cfg$ACTIVE.cfg");
+        print "Use 'console' to see the bootup messages.\n";
+    }
+}
+
+
+
+=begin doc
+
+  Connect to the serial console of the running Xen guest.
+
+=end doc
+
+=cut
+
+sub do_console
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "\nRunning console for $ACTIVE - exit with Ctrl+]\n";
+    print
+      "(You might need to press return a couple of times to see activity.)\n\n";
+
+    system("sudo xl console $ACTIVE");
+
+    print "\n";
+}
+
+
+
+=begin doc
+
+  Mark a particular instance as being current.
+
+=end doc
+
+=cut
+
+sub do_control
+{
+    my ($inst) = (@_);
+
+    #
+    #  Make sure we got an instance.
+    #
+    if ( !defined($inst) || !length($inst) )
+    {
+        print "Usage: control instanceName\n";
+        return;
+    }
+
+
+    #
+    #  If the user can control that instance then switch to it.
+    #
+    if ( canControl($inst) )
+    {
+        print "Controlling: $inst\n";
+        $ACTIVE      = $inst;
+        %lookupTable = %dispatch;
+
+        #
+        #  Now remove any blacklisted commands, if we have any.
+        #
+        if ( $xenBlacklists{ $inst } )
+        {
+            foreach my $banned ( split( /,/, $xenBlacklists{ $inst } ) )
+            {
+
+                # strip leading and trailing whitespace
+                $banned =~ s/^\s+//;
+                $banned =~ s/\s+$//;
+
+                next if ( !length($banned) );
+
+                # lowercase, because all our commands are.
+                $banned = lc($banned);
+
+                $lookupTable{ $banned } = undef;
+                delete( $lookupTable{ $banned } );
+            }
+        }
+    }
+    else
+    {
+        print
+          "The instance was not found, or you are not allowed to control it.\n";
+    }
+}
+
+
+
+=begin doc
+
+ Exit this shell, first saving any command history.
+
+=end doc
+
+=cut
+
+sub do_exit
+{
+
+    #
+    #  The name of the history file, inside the home directory.
+    #
+    my $hist = $CONFIG{ 'history' } || ".xen-shell";
+    my $file = $ENV{ 'HOME' } . "/" . $hist;
+
+    #
+    #  Save the history if the term module can.
+    #
+    if ( UNIVERSAL::can( $term, 'WriteHistory' ) )
+    {
+        $term->WriteHistory($file);
+    }
+
+    exit;
+}
+
+
+
+=begin doc
+
+  Show the user some help.
+
+  When called with no arguments it will display all supported commands.
+
+  If called with arguments then they we will show only help for the
+ specified command(s).
+
+=end doc
+
+=cut
+
+sub do_help
+{
+    my ($term) = (@_);
+
+    #
+    #  Help on a single command
+    #
+    if ( ( defined($term) ) && ( length($term) ) )
+    {
+        foreach my $cmd ( split( /[ \t]/, $term ) )
+        {
+
+            # Lookup command in our dispatch table.
+            my $c = $dispatch{ lc($cmd) };
+            if ($c)
+            {
+                my $args = $c->{ 'args' };
+
+                if ( !defined($args) ) {$args = '';}
+
+                print "\nCommand: $cmd $args\n\n";
+                print $c->{ 'help' } . "\n";
+            }
+            else
+            {
+                print "Unknown command '$cmd' - no help text available\n";
+            }
+        }
+        return;
+    }
+
+
+    #
+    #  Header
+    #
+    if ( $CONFIG{ 'banner' } )
+    {
+        print $CONFIG{ 'banner' } . "\n";
+    }
+    else
+    {
+        print "xen-shell v$RELEASE\n";
+    }
+    print "The following commands are available within this shell:\n\n";
+
+    #
+    #  Build up the short-help, indented it nicely.
+    #
+    foreach my $entry ( sort keys %dispatch )
+    {
+        my $hash = $dispatch{ $entry };
+
+        print sprintf( "%10s - %s\n", $entry, $hash->{ 'info' } );
+    }
+
+    #
+    #  Footer.
+    #
+    print "\nFor command-specific help run \"help command\".\n\n";
+
+}
+
+
+
+=begin doc
+
+  Show the user the names of the Xen instances they may control.
+
+=end doc
+
+=cut
+
+sub do_list
+{
+    print "You may control the following Xen instances:\n\n";
+
+    map( { print "\t$_\n" } @INSTANCES );
+
+    print "\n(Use 'control' to take control of a particular instance.)\n";
+}
+
+
+
+=begin doc
+
+  Allow the user to change their login password, if password-based
+ authentication is in use.
+
+  Note this function is disabled if ~/.ssh/authorized_keys is present.
+
+=end doc
+
+=cut
+
+sub do_password
+{
+    system("passwd");
+}
+
+
+
+=begin doc
+
+  This will pause the Xen guest.
+
+=end doc
+
+=cut
+
+sub do_pause
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Pausing instance: $ACTIVE\n";
+
+    system("sudo xl pause $ACTIVE");
+
+}
+
+
+
+=begin doc
+
+  Reboot the Xen guest.
+
+=end doc
+
+=cut
+
+sub do_reboot
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Rebooting instance: $ACTIVE\n";
+
+    system("sudo xl reboot $ACTIVE");
+}
+
+
+
+=begin doc
+
+  Allow the machine to be reinitialised to a fresh installation of
+ their Xen guest.
+
+  This ultimately invokes ~$USER/image.sh to do the work.
+
+=end doc
+
+=cut
+
+sub do_reimage
+{
+    if ( !-x "/home/$USER/image.sh" )
+    {
+        print "There is no reimaging script for user $USER\n";
+        print "Skipping.\n";
+        return;
+    }
+
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Reimaging instance: $ACTIVE\n";
+
+    #
+    # See if the instance is running
+    #
+    if ( isRunning($ACTIVE) )
+    {
+        print "Xen guest running.\n";
+        print "Please run 'shutdown' first\n";
+        return;
+    }
+    else
+    {
+        print "Machine not running, proceeding\n";
+    }
+
+
+    #
+    #  Run the xen-shell-reimage, either from /usr/bin, or /usr/local/bin.
+    #
+    if ( -x "/usr/bin/xen-shell-reimage" )
+    {
+        system("/usr/bin/xen-shell-reimage $ACTIVE $USER");
+        print "You may now boot your installation\n";
+    }
+    elsif ( -x "/usr/local/bin/xen-shell-reimage" )
+    {
+        system("/usr/local/bin/xl-reimage $ACTIVE $USER");
+        print "You may now boot your installation\n";
+    }
+    else
+    {
+        print "ERROR:  'xl-reimage' not found.\n";
+        print "ERROR:  Please report this as a bug to your server admin.\n";
+    }
+}
+
+
+
+=begin doc
+
+  Control reverse DNS for this user.
+
+  This allows the user to view/modify the contents of ~/ips.txt
+
+  Another script is required to actually take the contents of the files
+ and perform the DNS updates.
+
+=end doc
+
+=cut
+
+sub do_rdns
+{
+    my ($args) = (@_);
+
+    if ( !defined($args) || ( !length($args) ) )
+    {
+
+        # No arguments just show the current IP setup.
+        open( CURRENT, "<", "/home/$USER/ips.txt" ) or return;
+        while (<CURRENT>)
+        {
+            print;
+        }
+        close(CURRENT);
+        return;
+    }
+
+
+    #
+    #  We have an agument.  Assume it is of the form:
+    #
+    #  rdns xx.xx.xx.xx some.host.name
+    #
+    my ( $ip, $host ) = split( /[ \t]/, $args );
+
+    #
+    #  Test that the arguments are the right way round!
+    #
+    if ( $ip !~ /^([0-9.]*)$/ )
+    {
+        print "The IP address you've specified isn't numerical: '$ip'\n";
+        return;
+    }
+
+    #
+    #  OK we have a host and IP, we want to open the users file
+    # and update the hostname if it matches.
+    #
+    my $updated = 0;
+    my @lines;
+
+    open( CURRENT, "<", "/home/$USER/ips.txt" ) or return;
+    while (<CURRENT>)
+    {
+        my $line = $_;
+        my ( $i, $h ) = split( /[ \t]/, $line );
+        if ( $i eq $ip )
+        {
+            $line    = $ip . " " . $host . "\n";
+            $updated = 1;
+        }
+
+        push @lines, $line;
+    }
+    close(CURRENT);
+
+    #
+    #  If we updated save the new details.
+    #
+    if ($updated)
+    {
+        open( NEW, ">", "/home/$USER/ips.txt" );
+        foreach my $l (@lines)
+        {
+            print NEW $l;
+        }
+        close(NEW);
+        print "Set the reverse DNS for $ip to $host\n";
+
+        #
+        #  If we have a post-update command then we'll execute it.
+        #
+        if ( defined( $CONFIG{ 'updatedns' } ) &&
+             length( $CONFIG{ 'updatedns' } ) )
+        {
+
+            #
+            #  The command we'll run.
+            #
+            my $cmd = $CONFIG{ 'updatedns' };
+
+            #
+            #  Does this need a file to be inserted into the command line?
+            #
+            if ( $cmd =~ /\$FILE/ )
+            {
+                $cmd =~ s/\$FILE/\/home\/$USER\/ips.txt/g;
+            }
+
+            #
+            #  Run the potentially modified command.
+            #
+            system($cmd );
+        }
+        else
+        {
+
+            #
+            #  No command - we assume cron-fu will update the entries,
+            # so we should tell the user to expect a wait.
+            #
+            print "Please wait an hour or two for it to take effect\n";
+
+        }
+    }
+    else
+    {
+        print "IP details for IP '$ip' not found.  Ignoring\n";
+    }
+}
+
+
+
+=begin doc
+
+  Shutdown the instance.
+
+=end doc
+
+=cut
+
+sub do_shutdown
+{
+    my ($arg) = (@_);
+
+    #
+    #  Is this to be a forced shutdown?
+    #
+    my $force = 0;
+    $force = 1 if ( defined($arg) && ( lc($arg) eq "force" ) );
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Shutting down instance: $ACTIVE\n";
+    system("sudo xl shutdown $ACTIVE 2>/dev/null");
+
+    #
+    #  If we're forcing then we want to make sure it is gone.
+    #
+    if ($force)
+    {
+        print "Waiting to see if the shutdown succeeded.\n";
+
+        my $running = isRunning($ACTIVE);
+        my $count   = 9;
+
+        #
+        #  Sleep for five seconds to see if it worked.
+        #
+        #  Repeat a few times.
+        #
+        print "Waiting: ";
+        while ( ($count) && ($running) )
+        {
+            $running = isRunning($ACTIVE);
+
+            print "$count.. ";
+            sleep(5);
+
+            $count -= 1;
+        }
+        print "\n";
+
+        #
+        #  If it is *still* running then force it.
+        #
+        if ($running)
+        {
+            print "Still running.  Forcing the shutdown.\n";
+
+            #
+            #  Send the sysreqs
+            #
+            do_sysreq("reissuo");
+
+            sleep(2);
+            system("xl destroy $ACTIVE 2>/dev/null");
+
+            print "System terminated.\n";
+        }
+        else
+        {
+
+            #
+            #  The shutdown busy-loop worked.
+            #
+            print "Instance terminated\n";
+        }
+    }
+}
+
+
+
+=begin doc
+
+  Show status of the Xen guest:  Running/Shutdown
+
+  If the guest is running then show its uptime too.
+
+=end doc
+
+=cut
+
+sub do_status
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    #
+    #  Is the instance running?
+    #
+    my $running = isRunning($ACTIVE);
+
+
+    #
+    # Show state.
+    #
+    if ($running)
+    {
+        print "Guest : Running\n";
+
+        my $seconds = "";
+        my $cmd     = "sudo xl list --long $ACTIVE 2>/dev/null";
+
+        open( RUNNING, $cmd . "|" );
+        foreach my $line (<RUNNING>)
+        {
+            if ( $line =~ /\(up_time[ \t]*([0-9]+)/ )
+            {
+                $seconds = $1;
+            }
+        }
+        close(RUNNING);
+
+        if ( defined($seconds) && length($seconds) )
+        {
+            my $days = int( $seconds / ( 24 * 60 * 60 ) );
+            my $hours = ( $seconds / ( 60 * 60 ) ) % 24;
+            my $mins  = ( $seconds / 60 ) % 60;
+            my $secs  = $seconds % 60;
+
+            if ( length($hours) < 2 ) {$hours = "0" . $hours;}
+            if ( length($mins) < 2 )  {$mins  = "0" . $mins;}
+            if ( length($secs) < 2 )  {$secs  = "0" . $secs;}
+
+            print "Uptime: $days days $hours:$mins:$secs\n";
+        }
+    }
+    else
+    {
+        print "Guest: Shutdown\n";
+    }
+}
+
+
+
+=begin doc
+
+  Send a single sysreq keystroke to the current instance.
+
+=end doc
+
+=cut
+
+sub do_sysreq
+{
+    my ($string) = (@_);
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    #
+    #  Make sure we recieved a key.
+    #
+    if ( !defined($string) )
+    {
+        print <<EOF;
+Usage: sysreq [string]
+
+  Each character of the string will be sent as a sysreq key.
+EOF
+        return;
+    }
+
+    #
+    #  Split into letters.
+    #
+    foreach my $letter ( split( //, $string ) )
+    {
+
+        #
+        #  a-z + ? are the only valid keys we care about.
+        #
+        if ( $letter =~ /[a-z\?]/ )
+        {
+            print "Sending sysreq: $letter\n";
+            system("sudo xl sysrq $ACTIVE $letter 2>/dev/null");
+        }
+    }
+}
+
+
+
+=begin doc
+
+  Show Xen top information.
+
+=end doc
+
+=cut
+
+sub do_top
+{
+    system("sudo xl top");
+    system("clear");
+}
+
+
+
+=begin doc
+
+  This will unpause the Xen guest.
+
+=end doc
+
+=cut
+
+sub do_unpause
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+    print "Un-pausing instance: $ACTIVE\n";
+
+    system("sudo xl unpause $ACTIVE");
+}
+
+
+
+=begin doc
+
+  Show uptime of the guest.
+
+=end doc
+
+=cut
+
+sub do_uptime
+{
+
+    #
+    #  Make sure the user has selected an instance
+    # they can control.
+    #
+    return if ( !isControlling() );
+
+
+    my $host_uptime = `uptime`;
+    chomp($host_uptime);
+    print "Host : $host_uptime\n";
+
+    #
+    #  Info read from xl list.
+    #
+    my $upTime    = "";
+    my $startTime = "";
+
+    #
+    #  Seconds the guest has been up.
+    #
+    my $seconds = undef;
+
+    #
+    #  Find the uptime/start-time.
+    #
+    my $cmd = "sudo xl list --long $ACTIVE 2>/dev/null";
+
+    open( RUNNING, $cmd . "|" );
+    foreach my $line (<RUNNING>)
+    {
+        if ( $line =~ /\(up_time[ \t]*([0-9]+)/ )
+        {
+            $upTime = $1;
+        }
+        if ( $line =~ /\(start_time[ \t]*([0-9]+)/ )
+        {
+            $startTime = $1;
+        }
+    }
+    close(RUNNING);
+
+
+    #
+    #  If the 'up_time' line was present then we'll save the seconds.
+    #
+    if ( defined($upTime) && length($upTime) )
+    {
+        $seconds = $upTime;
+    }
+    elsif ( defined($startTime) && length($startTime) )
+    {
+
+        #
+        #  Get the seconds the guest has been up.
+        #
+        my $time = time;
+        $seconds = $time - $startTime;
+    }
+    else
+    {
+
+        #
+        #  Guest uptime not found?   Either :
+        #
+        #  1.  Guest not running.
+        #
+        #  2.  Bug
+        #
+        if ( isRunning($ACTIVE) )
+        {
+            print "Guest: Uptime not found for $ACTIVE\n";
+        }
+        else
+        {
+            print "Guest uptime unknown - guest not running!\n";
+        }
+        return;
+    }
+
+    #
+    #  Now parse the seconds into days/hours/minutes/seconds.
+    #
+    my $days = int( $seconds / ( 24 * 60 * 60 ) );
+    my $hours = ( $seconds / ( 60 * 60 ) ) % 24;
+    my $mins  = ( $seconds / 60 ) % 60;
+    my $secs  = $seconds % 60;
+
+
+    #
+    #  Plural days?
+    #
+    my $plural = 's';
+    $plural = '' if ( $days == 1 );
+
+    print sprintf "Guest: %d day%s %02d:%02d:%02d\n",
+      $days, $plural, $hours, $mins, $secs;
+}
+
+
+
+=begin doc
+
+  Show the user the version of this shell, and of the Xen software installed.
+
+=end doc
+
+=cut
+
+sub do_version
+{
+    my $xen = "";
+    my $cmd = "sudo xl info 2>/dev/null";
+
+    open( INFO, $cmd . "|" );
+    foreach my $line (<INFO>)
+    {
+        if ( $line =~ /^xen_major.*: (.*)$/ )
+        {
+            $xen .= $1;
+        }
+        if ( $line =~ /^xen_minor.*: (.*)$/ )
+        {
+            $xen .= "." . $1;
+        }
+        if ( $line =~ /^xen_extra.*: (.*)$/ )
+        {
+            $xen .= $1;
+        }
+    }
+    close(INFO);
+
+    if ( $CONFIG{ 'banner' } )
+    {
+        print $CONFIG{ 'banner' } . "\n";
+    }
+    else
+    {
+        print "xen-shell v$RELEASE";
+    }
+    if ( length($xen) )
+    {
+        print " running on Xen version $xen";
+    }
+
+    print "\n";
+}
+
+
+
+=begin doc
+
+  Show the username of the currently connected user.
+
+=end doc
+
+=cut
+
+sub do_whoami
+{
+    print $USER . "\n";
+}
+
+
+#
+#  Print a newline or two on termination, just to make things prettier.
+#
+END
+{
+    print "\n\n";
+}
+
+
+
+=head1 AUTHOR
+
+ Niels
+ --
+ http://www.syndicat.com
+
+=cut
+
+=head1 LICENSE
+
+Copyright (c) 2015 by Niels Dettenbach, forked from Steve Kemps.  All rights reserved.
+
+This module is free software;
+you can redistribute it and/or modify it under
+the same terms as Perl itself.
+The LICENSE file contains the full text of the license.
+
+=cut

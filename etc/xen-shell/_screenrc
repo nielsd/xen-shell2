@@ -1,0 +1,80 @@
+#
+#  _screenrc :  Disable dangerous options to GNU Screen.
+#
+# This file is distributed as part of xen-shell:
+#
+#   http://xen-tools.org/software/xen-shell/
+#
+# Steve
+# --
+#
+
+#
+#  Don't show the default startup message.
+#
+startup_message off
+
+#
+#  Shells are login shells.
+#
+deflogin on
+
+#
+#  Visual bell instead of sound
+#
+vbell on
+vbell_msg "   Wuff  ----  Wuff!!  "
+defscrollback 1024
+
+#
+#  Unbind these keys
+#
+bind :
+bind Z
+bind L
+bind ^\
+bind \\ quit
+bind K kill
+bind } history
+
+#
+# The vt100 description does not mention "dl". *sigh*
+#
+termcapinfo vt100 dl=5\E[M
+
+#
+# Set the hardstatus prop on gui terms to set the titlebar/icon title
+#
+termcapinfo xterm*|rxvt*|kterm*|Eterm* hs:ts=\E]0;:fs=\007:ds=\E]0;\007
+
+# An alternative hardstatus to display a bar at the bottom listing the
+# windownames and highlighting the current windowname in blue. (This is only
+# enabled if there is no hardstatus setting for your terminal)
+#
+# look and feel
+caption always "%{= bb}%{+b w}%n %h %=%t %c"
+hardstatus alwayslastline "%-Lw%{= BW}%50>%n%f* %t%{-}%+Lw%<"
+
+#
+# set these terminals up to be 'optimal' instead of vt100
+#
+termcapinfo xterm*|linux*|rxvt*|Eterm* OP
+
+# Change the xterm initialization string from is2=\E[!p\E[?3;4l\E[4l\E>
+# (This fixes the "Aborted because of window size change" konsole symptoms found
+#  in bug #134198)
+termcapinfo xterm 'is=\E[r\E[m\E[2J\E[H\E[?7h\E[?1;4;6l'
+
+#
+#  The title of our shell.
+#
+shelltitle "Syndicat Xen Console"
+
+#
+#  Message shown on startup.
+#
+wall "Syndicat Xen Console Starting .. please wait .."
+
+# invoke xen-shell
+shell /usr/bin/xen-shell
+

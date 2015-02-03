@@ -1,0 +1,112 @@
+#!/bin/sh
+#
+#  Invoke GNU screen with some sane options so that we can allow
+# the user to run the xen-shell inside it, but disallow them from breaking
+# out of it.
+#
+# Steve / Niels
+# --
+#
+
+
+#
+#  Make sure we have a sane path
+#
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/usr/sbin:$PATH
+
+
+
+#
+#  Firstly find the custom screen configuration file we're 
+# wanting to use.
+#
+screenrc=
+for i in /etc/xen-shell/_screenrc ; do
+
+    # If we've not found the file already
+    if [ -z "${screenrc}" ]; then
+
+        # And the given file exists
+        if [ -e $i ]; then
+
+            # Record it
+            screenrc=$i
+        fi
+    fi
+done
+
+
+#
+#  Make sure we found a configuration file for GNU Screen
+#
+if [ -z "${screenrc}" ]; then
+    echo "Could not find our custom GNU Screen configuration file"
+    echo "Aborting"
+    sleep 5
+    exit
+fi
+
+
+#
+#  Now find the xen-shell
+#
+xs=
+for i in /usr/bin/xen-shell /usr/local/bin/xen-shell ; do
+
+    # If we've not found the shell already
+    if [ -z "${xs}" ]; then
+
+        # And the given potential shell exists
+        if [ -x $i ]; then
+
+            # Record it
+            xs=$i
+        fi
+    fi
+done
+
+#
+#  If we haven't found our shell then abort
+#
+if [ -z "${xs}" ]; then
+    echo "Could not find the xen-shell in the directories we searched."
+    echo "Aborting"
+    sleep 5
+    exit
+fi
+
+
+#
+#  Now that we know which shell and configuration file to execute
+# start our xen-shell inside the new instance of GNU Screen.
+#
+#
+#  Options we use:
+#
+# -d -R
+#   Reattach a session and if necessary detach or even create it first.
+#
+# -c file
+#   Override the default configuration file from "$HOME/.screenrc" to file
+#
+# -e^Aa
+#   Explicitly set the escape sequence which GNU Screen should use.
+#
+# -s
+#   set the login shell - this is the command which will run when the user
+#  created a new window, or when the screen session starts/restarts.
+#   
+# -S
+#   set the title of the screen session.
+#
+
+screen -d -R -c ${screenrc} -e^Aa -s ${xs}  -S $USER
+
+
+#
+#  End of this script
+#
+exit
+
+
+

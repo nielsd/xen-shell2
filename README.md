@@ -12,6 +12,28 @@ xen-shell2 is a project from Niels Dettenbach <nd@syndicat.com>.
 
 Pls feel free to contact me in case of questions:
 
+
+FEATURES
+--------
+- give users a simplified access to manage one or multiple dedicated DomUs on a XEN system over Console (i.e. SSH)
+- boot, shutdown domains
+- pause/unpause domains
+- connect to consoles of domains (text and/or serial consoles)
+- send sysreq to domains
+- show status of domains
+- see bandwidth usage (current/over time) by domains
+- manage (reverse) DNS entries for dedicated domain IPs
+- full SSH compatibility (i.e. key-based and password based auth)
+- extensible 
+
+
+CHANGES since xen-shell 1.9
+---------------------------
+- Compatibility to actual / current XEN 4 / XL stack
+- more generic / simplified user management
+- some cosmetics / cleanout
+
+
 CONTACT
 --------
 
@@ -47,20 +69,22 @@ INTALLATION
       echo "/usr/bin/xen-shell" >> /etc/shells
 
       # create a group for xen-shell users 
-      groupadd xen-shell
+      groupadd xenshell
 
-      # allow xen-shell group to sudo xl:
+      # allow xenshell group to sudo xl:
 
 
 (Installation by Makefile follows asap)
 
 UPGRADE
 --------
-xen-shell2 is widely compatible to xen-shell 1.9 (the last xen-shell version from Steve) - except xm commands like (xm-reimage) are now substituted by xl (i.e. xl-reimage). Domu configurations are compatible, except that the default blacklist of commands is not empty anymore for security reasons. 
+xen-shell2 is widely compatible to xen-shell 1.9 (the last xen-shell version from Steve) - except xm commands like (xm-reimage) are now substituted by xl (i.e. xen-shell-reimage). 
 
-However, We recommend to use and adopt our new /etc/xen-shell/xen-shell.conf in the current version.
+Domu configurations are compatible, except that the default blacklist of commands is not empty anymore for security reasons. 
 
-Just copy over the files xen-shell and xen-login-shell in /usr/bin/
+However, We recommend to use and adopt our partly new /etc/xen-shell/xen-shell.conf in the current version.
+
+Just copy over the files xen-shell and xen-login-shell in /usr/bin/ (or $PREFIX/bin/)
 
 
 GIVE NON-PRIV USERS A XEN-SHELL
@@ -120,6 +144,7 @@ The following commands are available within this shell:
     status - Show the status of the Xen guest.
     sysreq - Send a 'sysreq' keystroke to the guest.
    unpause - This will unpause the Xen guest.
+ updatedns - update (reverse) DNS entrie(s)
     uptime - Show the uptime information of your guest system and this host.
    version - Show the version of this shell, and of Xen.
     whoami - Show the user you're connected to the host system as.
@@ -132,9 +157,18 @@ REIMAGE / RESTORE
 You may place a reimage.sh in a users home directory which helds code that provides some kind of a restore of a users DomU('s).
 
 
+DNS / REVERSE DNS
+-----------------
+To enable the functionality of DNS update access pls take a look at the code.
+
+A users IPs are to define in a textfile "ips.txt" in users home dir.
+
+
 TODO
 ----
 - Makefile / Install
-- adopting manpages
+- multilinguality
+- adopting manpages for xen-shellm xen-login-shell and xen-shell-reimage (former xm-reimage)
+- new plugin design for easy implementation of new commands
 - redesigned (generic) backup / restore interface for DomUs, allowing different backup / restore techniques to adapt
 - resource management (CPU POOLS, Memory)
