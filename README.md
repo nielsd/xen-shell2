@@ -1,5 +1,8 @@
 # xen-shell2
 XEN guests / cloud management shell which provides secure, simple and easy (remote, multi-user, multi-level) console based access to XEN DomU management 
+
+see our new main project page https://www.syndicat.com/open_source/projekte/xen_shell2/ for durther details and contacts..
+
 xen-shell2 is a fork of xen-shell (initially from Steve Kemps - http://www.xen-tools.org/software/xen-shell/)
 
 xen-shell2 offers compatibility to the current XEN XL tool stack, which ubstitutes the outdated XM stack step by step.
