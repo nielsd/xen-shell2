@@ -11,7 +11,7 @@ More details will follow here asap.
 
 The Project is licensed under the GPLv2 and a fork of the xen-shell from Steve kemps - many thanks to him for his excellent work!
 
-xen-shell2 is a project from Niels Dettenbach <nd@syndicat.com>.
+xen-shell2 is a project from Niels Dettenbach <nd@syndicat.com> (<a href="https://www.syndicat.com">Syndicat IT & Internet</a>).
 
 Pls feel free to contact me in case of questions:
 
@@ -42,7 +42,7 @@ CONTACT
 
       Niels Dettenbach
       Mail: nd@syndicat.com
-      WWW: http://www.syndicat.com
+      WWW: https://www.syndicat.com
 
       Current project page: 
       https://github.com/nielsd/xen-shell2
