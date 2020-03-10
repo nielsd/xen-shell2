@@ -41,6 +41,9 @@ CONTACT
       Mail: nd@syndicat.com
       WWW: http://www.syndicat.com
 
+      Download:
+      http://www.syndicat.com/xen-shell/
+
       Current project page: 
       https://github.com/nielsd/xen-shell2
 
@@ -71,10 +74,11 @@ INTALLATION
       # create a group for xen-shell users 
       groupadd xenshell
 
-      # allow xenshell group to sudo xl:
+      # allow xenshell group to sudo xl if required - add etc/sudoers.d/xen-shell content to your systems sudo config if required.
 
 
 (Installation by Makefile follows asap)
+
 
 UPGRADE
 --------
