@@ -387,7 +387,11 @@ my %dispatch = (
                   help => "Show whether the Xen guest is running or not.",
                   info => "Show the status of the Xen guest.",
                 },
-    "author" => { sub => \&do_author, },
+    "author" => {
+        sub => \&do_author,
+        help => "Show authorship information",
+        info => "Show authorship information",
+    },
     "sysreq" => {
         sub  => \&do_sysreq,
         args => "[string]",
